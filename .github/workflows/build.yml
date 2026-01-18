@@ -9,14 +9,14 @@ env:
 
 jobs:
   build:
-    # ⭐️ 关键改动 1：降级使用 macos-14 (对应 Xcode 15)
+    # 使用稳定版 macOS 14 (Xcode 15)
     runs-on: macos-14
     
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # ⭐️ 关键改动 2：强制指定使用 Xcode 15.4 (最稳定的版本)
+      # 使用 Xcode 15.4 (避开 Xcode 16 的模拟器检查 BUG)
       - name: Set up Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -37,55 +37,39 @@ jobs:
           pnpm install
           pnpm pp:worker
 
-      # ⭐️ 关键改动 3：自动修复缺失的图标和预览文件夹
+      # ⭐️ 修复部分：改用单行 echo，杜绝语法错误
       - name: Fix Assets & Icons
         run: |
           echo "Creating missing directories..."
-          # 修复 Xcode 找不到预览文件夹的报错
           mkdir -p "./PakePlus/Preview Content"
           
           echo "Generating missing AppIcons..."
-          # 找到 Assets 文件夹
           ASSETS_PATH="./PakePlus/Assets.xcassets/AppIcon.appiconset"
           
-          # 如果根目录有 app-icon.png，我们用它生成一个标准的 1024 图标
+          # 1. 确保根目录有图标，如果没有就生成一个临时的红色方块，防止编译报错
+          if [ ! -f "app-icon.png" ]; then
+             echo "No app-icon.png found, creating a dummy placeholder..."
+             # 生成一个 1x1 的红色像素点作为临时图标
+             echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" | base64 -d > app-icon.png
+          fi
+          
+          # 2. 处理图标
           if [ -f "app-icon.png" ]; then
-            echo "Found app-icon.png, resizing..."
-            # 使用 sips 工具生成 1024x1024 的图标，解决 actool 报错
+            echo "Processing icon..."
+            # 强制生成 1024x1024 图片
             sips -z 1024 1024 app-icon.png --out "$ASSETS_PATH/1024.png"
             
-            # 暴力覆盖 Contents.json，确保它只认这一个图标 (简单粗暴但有效)
-            cat > "$ASSETS_PATH/Contents.json" <<EOF
-            {
-              "images" : [
-                {
-                  "size" : "1024x1024",
-                  "idiom" : "ios-marketing",
-                  "filename" : "1024.png",
-                  "scale" : "1x"
-                },
-                {
-                  "size" : "1024x1024",
-                  "idiom" : "universal",
-                  "platform" : "ios",
-                  "filename" : "1024.png"
-                }
-              ],
-              "info" : {
-                "version" : 1,
-                "author" : "xcode"
-              }
-            }
-            EOF
+            # 【关键修改】用单行命令写入配置，避免 EOF 缩进报错
+            echo '{"images":[{"size":"1024x1024","idiom":"ios-marketing","filename":"1024.png","scale":"1x"},{"size":"1024x1024","idiom":"universal","platform":"ios","filename":"1024.png"}],"info":{"version":1,"author":"xcode"}}' > "$ASSETS_PATH/Contents.json"
           fi
 
-      # ⭐️ 关键改动 4：使用 Archive 模式打包 (配合 Xcode 15.4)
+      # 使用 Archive 模式打包
       - name: Archive with Xcode
         run: |
           PROJECT_NAME=$(ls -d *.xcodeproj | head -n 1)
           SCHEME_NAME=$(basename "$PROJECT_NAME" .xcodeproj)
           
-          echo "Archiving $SCHEME_NAME with Xcode 15.4..."
+          echo "Archiving $SCHEME_NAME..."
           
           xcodebuild archive \
             -project "$PROJECT_NAME" \
@@ -106,7 +90,6 @@ jobs:
           APP_PATH=$(find ./build/${{ env.NAME }}.xcarchive -name "*.app" -type d | head -n 1)
           echo "Found App at: $APP_PATH"
           
-          # 复制并压缩
           cp -r "$APP_PATH" Payload/
           zip -r "${{ env.NAME }}-${{ env.VERSION }}.ipa" Payload
           echo "ipa_path=${{ env.NAME }}-${{ env.VERSION }}.ipa" >> $GITHUB_ENV
@@ -114,7 +97,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SillyTavern-Stable-IPA
+          name: SillyTavern-IPA
           path: "*.ipa"
 
       - name: Upload to Release
