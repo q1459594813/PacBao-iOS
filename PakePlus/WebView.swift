@@ -2,20 +2,29 @@
 //  WebView.swift
 //  PakePlus
 //
-//  Created by Song on 2025/3/30.
+//  整合了酒馆全屏补丁与优化版本
 //
 
 import SwiftUI
 import WebKit
 
 struct WebView: UIViewRepresentable {
-    let url: URL
+    // 1️⃣ 这里已经改成了你的酒馆地址
+    let url: URL = URL(string: "http://100.86.55.29:8000")!
     let debug = false
 
     func makeUIView(context: Context) -> WKWebView {
-        let webView = WKWebView()
+        // 2️⃣ 配置允许全屏 API 调用
+        let config = WKWebViewConfiguration()
+        config.allowsElementPresentingFullscreen = true 
         
-        // debug script
+        let webView = WKWebView(frame: .zero, configuration: config)
+        
+        // 设置滚动效果：禁用回弹（让酒馆界面更稳固，不会上下晃动）
+        webView.scrollView.bounces = false
+        webView.navigationDelegate = context.coordinator
+
+        // 3️⃣ 调试脚本支持
         if debug, let debugScript = WebView.loadJSFile(named: "vConsole") {
             let fullScript = debugScript + "\nvar vConsole = new window.VConsole();"
             let userScript = WKUserScript(
@@ -26,19 +35,24 @@ struct WebView: UIViewRepresentable {
             webView.configuration.userContentController.addUserScript(userScript)
         }
 
-        // webView.customUserAgent = ""
-        
-        // disable double tap zoom
-        let script = """
+        // 4️⃣ 核心注入：禁用缩放 + 注入全屏补丁
+        let tavernScript = """
+            // 禁用双击缩放
             var meta = document.createElement('meta');
             meta.name = 'viewport';
             meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
             document.head.appendChild(meta);
+
+            // 🎬 注入全屏 API 支持（解决前端卡全屏按钮无效问题）
+            if (document.documentElement.webkitRequestFullscreen) {
+                document.documentElement.requestFullscreen = document.documentElement.webkitRequestFullscreen;
+                Element.prototype.requestFullscreen = Element.prototype.webkitRequestFullscreen || Element.prototype.webkitEnterFullscreen;
+            }
         """
-        let scriptInjection = WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
+        let scriptInjection = WKUserScript(source: tavernScript, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
         webView.configuration.userContentController.addUserScript(scriptInjection)
         
-        // load custom script
+        // 5️⃣ 加载自定义外部 JS 文件 (如有)
         if let customScript = WebView.loadJSFile(named: "custom") {
             let userScript = WKUserScript(
                 source: customScript,
@@ -48,10 +62,10 @@ struct WebView: UIViewRepresentable {
             webView.configuration.userContentController.addUserScript(userScript)
         }
 
-        // load url
+        // 6️⃣ 执行加载
         webView.load(URLRequest(url: url))
         
-        // Add gesture recognizers
+        // 添加手势：左右滑动切换页面（可选，如果你习惯酒馆内滑动的可以保留）
         let rightSwipeGesture = UISwipeGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleRightSwipe(_:)))
         rightSwipeGesture.direction = .right
         webView.addGestureRecognizer(rightSwipeGesture)
@@ -64,20 +78,17 @@ struct WebView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {
-        let request = URLRequest(url: url)
-        print("updateUIView: \(request.url?.absoluteString ?? "")")
-        uiView.load(request)
+        // 更新逻辑：通常不需要重复 load，除非 URL 发生变化
+        // print("WebView Updated")
     }
 
-    // add coordinator to prevent zoom
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
 
-    class Coordinator: NSObject, UIScrollViewDelegate {
+    class Coordinator: NSObject, UIScrollViewDelegate, WKNavigationDelegate {
         func viewForZooming(in scrollView: UIScrollView) -> UIView? {
-            // disable zoom
-            return nil
+            return nil // 彻底禁止缩放
         }
         
         @objc func handleRightSwipe(_ gesture: UISwipeGestureRecognizer) {
@@ -93,25 +104,19 @@ struct WebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            print("didFinish navigation: \(String(describing: webView.url))")
-            // currentURL = webView.url
+            print("酒馆连接成功: \(String(describing: webView.url))")
         }
     }
 }
 
-
 extension WebView {
     static func loadJSFile(named filename: String) -> String? {
         guard let path = Bundle.main.path(forResource: filename, ofType: "js") else {
-            print("Could not find \(filename).js in bundle")
             return nil
         }
-        
         do {
-            let jsString = try String(contentsOfFile: path, encoding: .utf8)
-            return jsString
+            return try String(contentsOfFile: path, encoding: .utf8)
         } catch {
-            print("Error loading \(filename).js: \(error)")
             return nil
         }
     }
