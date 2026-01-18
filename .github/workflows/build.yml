@@ -19,13 +19,10 @@ jobs:
         with:
           xcode-version: '16.2.0'
 
-      # ⭐️ 第一步：彻底修复并清理可能导致报错的图标文件
       - name: Fix Assets and Icons
         run: |
           echo "Cleaning up problematic asset files..."
-          # 如果图标文件夹有问题，我们直接强行重置它的配置文件
           find ./ -name "Contents.json" -exec chmod 644 {} \;
-          # 确保所有的 PNG 文件都是可读的
           find ./ -name "*.png" -exec chmod 644 {} \;
 
       - uses: pnpm/action-setup@v3
@@ -43,48 +40,45 @@ jobs:
           pnpm install
           pnpm pp:worker
 
-      # ⭐️ 第二步：改用原生的 xcodebuild 编译（绕过 Theos 的错误）
+      # ⭐️ 核心修复：增加了 -destination 'generic/platform=iOS'
       - name: Build with Xcode
         run: |
-          # 找到项目文件名
           PROJECT_NAME=$(ls -d *.xcodeproj | head -n 1)
           SCHEME_NAME=$(basename "$PROJECT_NAME" .xcodeproj)
           
-          echo "Building $SCHEME_NAME..."
+          echo "Building $SCHEME_NAME for generic iOS device..."
           
-          # 直接编译成 .app 文件
           xcodebuild -project "$PROJECT_NAME" \
                      -scheme "$SCHEME_NAME" \
                      -configuration Release \
                      -sdk iphoneos \
+                     -destination 'generic/platform=iOS' \
                      -derivedDataPath ./build \
-                     clean build \
+                     build \
                      CODE_SIGNING_ALLOWED=NO \
-                     CODE_SIGNING_REQUIRED=NO
+                     CODE_SIGNING_REQUIRED=NO \
+                     COMPILER_INDEX_STORE_ENABLE=NO
 
-      # ⭐️ 第三步：手动封装成 IPA
       - name: Package IPA
         run: |
           mkdir -p Payload
-          # 找到刚才生成的 .app 文件夹并放入 Payload
-          APP_PATH=$(find ./build -name "*.app" -type d | head -n 1)
+          # 寻找生成的 .app 文件夹
+          APP_PATH=$(find ./build -name "*.app" -type d | grep -v "Intermediate" | head -n 1)
+          echo "App found at: $APP_PATH"
           cp -r "$APP_PATH" Payload/
-          # 压缩成 IPA
           zip -r "${{ env.NAME }}-${{ env.VERSION }}.ipa" Payload
           echo "ipa_path=${{ env.NAME }}-${{ env.VERSION }}.ipa" >> $GITHUB_ENV
 
-      # ⭐️ 第四步：上传到 Artifacts (方便你直接下载，不用去 Release 找)
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.NAME }}-IPA-File
-          path: ${{ env.ipa_path }}
+          name: SillyTavern-IPA
+          path: "*.ipa"
 
-      # 同时也发一份到 Releases
       - name: Upload to Release
         uses: softprops/action-gh-release@v1
         with:
-          files: ${{ env.ipa_path }}
+          files: "*.ipa"
           tag_name: 'v${{ env.VERSION }}'
           name: '${{ env.NAME }} v${{ env.VERSION }}'
           draft: false
