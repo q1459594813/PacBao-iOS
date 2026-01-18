@@ -9,23 +9,19 @@ env:
 
 jobs:
   build:
-    runs-on: macos-latest
+    # ⭐️ 关键改动 1：降级使用 macos-14 (对应 Xcode 15)
+    runs-on: macos-14
+    
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      # ⭐️ 关键改动 2：强制指定使用 Xcode 15.4 (最稳定的版本)
       - name: Set up Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: '16.2.0'
+          xcode-version: '15.4'
 
-      # ⭐️ 核心修复：创建文件夹并清理项目残留
-      - name: Prepare Workspace
-        run: |
-          mkdir -p "./PakePlus/Preview Content"
-          # 彻底清除可能导致报错的缓存
-          rm -rf build/
-          
       - uses: pnpm/action-setup@v3
         with:
           version: latest
@@ -41,13 +37,55 @@ jobs:
           pnpm install
           pnpm pp:worker
 
-      # ⭐️ 核心步骤：改用 xcodebuild archive 模式
+      # ⭐️ 关键改动 3：自动修复缺失的图标和预览文件夹
+      - name: Fix Assets & Icons
+        run: |
+          echo "Creating missing directories..."
+          # 修复 Xcode 找不到预览文件夹的报错
+          mkdir -p "./PakePlus/Preview Content"
+          
+          echo "Generating missing AppIcons..."
+          # 找到 Assets 文件夹
+          ASSETS_PATH="./PakePlus/Assets.xcassets/AppIcon.appiconset"
+          
+          # 如果根目录有 app-icon.png，我们用它生成一个标准的 1024 图标
+          if [ -f "app-icon.png" ]; then
+            echo "Found app-icon.png, resizing..."
+            # 使用 sips 工具生成 1024x1024 的图标，解决 actool 报错
+            sips -z 1024 1024 app-icon.png --out "$ASSETS_PATH/1024.png"
+            
+            # 暴力覆盖 Contents.json，确保它只认这一个图标 (简单粗暴但有效)
+            cat > "$ASSETS_PATH/Contents.json" <<EOF
+            {
+              "images" : [
+                {
+                  "size" : "1024x1024",
+                  "idiom" : "ios-marketing",
+                  "filename" : "1024.png",
+                  "scale" : "1x"
+                },
+                {
+                  "size" : "1024x1024",
+                  "idiom" : "universal",
+                  "platform" : "ios",
+                  "filename" : "1024.png"
+                }
+              ],
+              "info" : {
+                "version" : 1,
+                "author" : "xcode"
+              }
+            }
+            EOF
+          fi
+
+      # ⭐️ 关键改动 4：使用 Archive 模式打包 (配合 Xcode 15.4)
       - name: Archive with Xcode
         run: |
           PROJECT_NAME=$(ls -d *.xcodeproj | head -n 1)
           SCHEME_NAME=$(basename "$PROJECT_NAME" .xcodeproj)
           
-          echo "Archiving $SCHEME_NAME..."
+          echo "Archiving $SCHEME_NAME with Xcode 15.4..."
           
           xcodebuild archive \
             -project "$PROJECT_NAME" \
@@ -59,17 +97,16 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            COMPILER_INDEX_STORE_ENABLE=NO \
-            ASSETCATALOG_COMPILER_SKIP_APP_STORE_UTILIZATION=YES \
-            VALIDATE_WORKSPACE=NO
+            COMPILER_INDEX_STORE_ENABLE=NO
 
-      # ⭐️ 核心步骤：从归档中提取 .app 并打包 IPA
       - name: Export App and Package IPA
         run: |
           mkdir -p Payload
-          # 从 .xcarchive 文件夹中提取真正的 App 文件
+          # 从归档中提取 App
           APP_PATH=$(find ./build/${{ env.NAME }}.xcarchive -name "*.app" -type d | head -n 1)
           echo "Found App at: $APP_PATH"
+          
+          # 复制并压缩
           cp -r "$APP_PATH" Payload/
           zip -r "${{ env.NAME }}-${{ env.VERSION }}.ipa" Payload
           echo "ipa_path=${{ env.NAME }}-${{ env.VERSION }}.ipa" >> $GITHUB_ENV
@@ -77,7 +114,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SillyTavern-Success-IPA
+          name: SillyTavern-Stable-IPA
           path: "*.ipa"
 
       - name: Upload to Release
