@@ -19,16 +19,13 @@ jobs:
         with:
           xcode-version: '16.2.0'
 
-      # ⭐️ 核心修复步骤：确保路径存在，哪怕它是空的
-      - name: Fix Assets and Folders
+      # ⭐️ 核心修复：创建文件夹并清理项目残留
+      - name: Prepare Workspace
         run: |
-          echo "Fixing directory structure..."
-          # 创建缺少的预览文件夹，防止 Xcode 报错
           mkdir -p "./PakePlus/Preview Content"
-          # 确保权限正常
-          find ./ -name "Contents.json" -exec chmod 644 {} \;
-          find ./ -name "*.png" -exec chmod 644 {} \;
-
+          # 彻底清除可能导致报错的缓存
+          rm -rf build/
+          
       - uses: pnpm/action-setup@v3
         with:
           version: latest
@@ -44,32 +41,35 @@ jobs:
           pnpm install
           pnpm pp:worker
 
-      - name: Build with Xcode
+      # ⭐️ 核心步骤：改用 xcodebuild archive 模式
+      - name: Archive with Xcode
         run: |
           PROJECT_NAME=$(ls -d *.xcodeproj | head -n 1)
           SCHEME_NAME=$(basename "$PROJECT_NAME" .xcodeproj)
           
-          echo "Building $SCHEME_NAME..."
+          echo "Archiving $SCHEME_NAME..."
           
-          xcodebuild -project "$PROJECT_NAME" \
-                     -scheme "$SCHEME_NAME" \
-                     -configuration Release \
-                     -sdk iphoneos \
-                     -destination 'generic/platform=iOS' \
-                     -derivedDataPath ./build \
-                     build \
-                     CODE_SIGNING_ALLOWED=NO \
-                     CODE_SIGNING_REQUIRED=NO \
-                     COMPILER_INDEX_STORE_ENABLE=NO \
-                     ASSETCATALOG_COMPILER_SKIP_APP_STORE_UTILIZATION=YES \
-                     ACTOOL_VALIDATE_CONTENTS=NO
+          xcodebuild archive \
+            -project "$PROJECT_NAME" \
+            -scheme "$SCHEME_NAME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "./build/${{ env.NAME }}.xcarchive" \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            ASSETCATALOG_COMPILER_SKIP_APP_STORE_UTILIZATION=YES \
+            VALIDATE_WORKSPACE=NO
 
-      - name: Package IPA
+      # ⭐️ 核心步骤：从归档中提取 .app 并打包 IPA
+      - name: Export App and Package IPA
         run: |
           mkdir -p Payload
-          # 寻找生成的 .app 文件夹
-          APP_PATH=$(find ./build/Build/Products/Release-iphoneos -name "*.app" -type d -maxdepth 1 | head -n 1)
-          echo "App found at: $APP_PATH"
+          # 从 .xcarchive 文件夹中提取真正的 App 文件
+          APP_PATH=$(find ./build/${{ env.NAME }}.xcarchive -name "*.app" -type d | head -n 1)
+          echo "Found App at: $APP_PATH"
           cp -r "$APP_PATH" Payload/
           zip -r "${{ env.NAME }}-${{ env.VERSION }}.ipa" Payload
           echo "ipa_path=${{ env.NAME }}-${{ env.VERSION }}.ipa" >> $GITHUB_ENV
@@ -77,7 +77,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SillyTavern-Final-IPA
+          name: SillyTavern-Success-IPA
           path: "*.ipa"
 
       - name: Upload to Release
