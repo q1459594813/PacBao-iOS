@@ -4,5 +4,22 @@
 <dict>
 	<key>NSCameraReactionEffectGesturesEnabledDefault</key>
 	<false/>
+	
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+
+	<key>UIStatusBarHidden</key>
+	<true/>
+
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<false/>
+
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
 </dict>
 </plist>
