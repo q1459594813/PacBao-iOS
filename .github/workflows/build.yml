@@ -9,14 +9,13 @@ env:
 
 jobs:
   build:
-    # 继续使用稳定的 Xcode 15 环境
+    # 坚持使用 Xcode 15.4 (避开 Xcode 16 的图标 BUG)
     runs-on: macos-14
     
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 使用 Xcode 15.4 (最稳版本)
       - name: Set up Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -37,23 +36,32 @@ jobs:
           pnpm install
           pnpm pp:worker
 
-      # ⭐️ 核心修复 1：强制降级项目文件版本，让 Xcode 15 能读懂
-      - name: Downgrade Project Format
+      # ⭐️ 核心手术步骤：把 Xcode 16 的新特性改成 Xcode 15 能懂的样子
+      - name: Downgrade Project Compatibility
         run: |
-          echo "Downgrading project format to be compatible with Xcode 15..."
-          # 找到项目配置文件
+          echo "Starting project surgery..."
           PBXPROJ=$(find . -name "project.pbxproj" | head -n 1)
           
           if [ -f "$PBXPROJ" ]; then
-            # 将版本号 77 (Xcode 16) 强行改为 54 (Xcode 14/15)
+            echo "Found project file: $PBXPROJ"
+            
+            # 1. 把版本号 77 降级为 54
             sed -i '' 's/objectVersion = [0-9]*;/objectVersion = 54;/g' "$PBXPROJ"
-            echo "Project format downgraded successfully."
+            
+            # 2. 【关键】把“同步组”强行改成普通“组” (修复 Crash 的核心)
+            # 将 PBXFileSystemSynchronizedRootGroup 替换为 PBXGroup
+            sed -i '' 's/isa = PBXFileSystemSynchronizedRootGroup;/isa = PBXGroup;/g' "$PBXPROJ"
+            
+            # 3. 删除 Xcode 15 不支持的 exceptions 字段 (如果有)
+            sed -i '' '/exceptions = (/d' "$PBXPROJ"
+            
+            echo "Surgery complete. Project is now Xcode 15 compatible."
           else
             echo "Error: project.pbxproj not found!"
             exit 1
           fi
 
-      # ⭐️ 核心修复 2：生成缺失的图标，防止报错
+      # 修复图标 (保持不变，这个逻辑是好的)
       - name: Fix Assets & Icons
         run: |
           echo "Creating missing directories..."
@@ -62,20 +70,17 @@ jobs:
           echo "Generating missing AppIcons..."
           ASSETS_PATH="./PakePlus/Assets.xcassets/AppIcon.appiconset"
           
-          # 1. 确保图标存在 (如果没有就生成红色占位符)
           if [ ! -f "app-icon.png" ]; then
              echo "No app-icon.png found, creating placeholder..."
              echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" | base64 -d > app-icon.png
           fi
           
-          # 2. 转换图标尺寸
           if [ -f "app-icon.png" ]; then
             sips -z 1024 1024 app-icon.png --out "$ASSETS_PATH/1024.png"
-            # 写入配置文件
             echo '{"images":[{"size":"1024x1024","idiom":"ios-marketing","filename":"1024.png","scale":"1x"},{"size":"1024x1024","idiom":"universal","platform":"ios","filename":"1024.png"}],"info":{"version":1,"author":"xcode"}}' > "$ASSETS_PATH/Contents.json"
           fi
 
-      # 打包流程
+      # 打包流程 (保持不变)
       - name: Archive with Xcode
         run: |
           PROJECT_NAME=$(ls -d *.xcodeproj | head -n 1)
@@ -98,7 +103,6 @@ jobs:
       - name: Export App and Package IPA
         run: |
           mkdir -p Payload
-          # 提取 App 文件
           APP_PATH=$(find ./build/${{ env.NAME }}.xcarchive -name "*.app" -type d | head -n 1)
           echo "Found App at: $APP_PATH"
           
