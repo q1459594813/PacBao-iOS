@@ -6,11 +6,11 @@ on:
 env:
   NAME: "SillyTavern"
   VERSION: "1.0.0"
+  BUNDLE_ID: "com.tavern.ios"
 
 jobs:
   build:
-    # 坚持使用 Xcode 15.4 (避开 Xcode 16 的图标 BUG)
-    runs-on: macos-14
+    runs-on: macos-14 # 使用稳定的 Xcode 15 环境
     
     steps:
       - name: Checkout Repository
@@ -36,69 +36,83 @@ jobs:
           pnpm install
           pnpm pp:worker
 
-      # ⭐️ 核心手术步骤：把 Xcode 16 的新特性改成 Xcode 15 能懂的样子
-      - name: Downgrade Project Compatibility
-        run: |
-          echo "Starting project surgery..."
-          PBXPROJ=$(find . -name "project.pbxproj" | head -n 1)
-          
-          if [ -f "$PBXPROJ" ]; then
-            echo "Found project file: $PBXPROJ"
-            
-            # 1. 把版本号 77 降级为 54
-            sed -i '' 's/objectVersion = [0-9]*;/objectVersion = 54;/g' "$PBXPROJ"
-            
-            # 2. 【关键】把“同步组”强行改成普通“组” (修复 Crash 的核心)
-            # 将 PBXFileSystemSynchronizedRootGroup 替换为 PBXGroup
-            sed -i '' 's/isa = PBXFileSystemSynchronizedRootGroup;/isa = PBXGroup;/g' "$PBXPROJ"
-            
-            # 3. 删除 Xcode 15 不支持的 exceptions 字段 (如果有)
-            sed -i '' '/exceptions = (/d' "$PBXPROJ"
-            
-            echo "Surgery complete. Project is now Xcode 15 compatible."
-          else
-            echo "Error: project.pbxproj not found!"
-            exit 1
-          fi
+      # ⭐️ 核心步骤 1：安装 XcodeGen 工具
+      - name: Install XcodeGen
+        run: brew install xcodegen
 
-      # 修复图标 (保持不变，这个逻辑是好的)
+      # ⭐️ 核心步骤 2：生成缺失的图标 (防止新项目缺资源)
       - name: Fix Assets & Icons
         run: |
-          echo "Creating missing directories..."
-          mkdir -p "./PakePlus/Preview Content"
-          
           echo "Generating missing AppIcons..."
+          mkdir -p "./PakePlus/Preview Content"
           ASSETS_PATH="./PakePlus/Assets.xcassets/AppIcon.appiconset"
           
+          # 生成临时图标
           if [ ! -f "app-icon.png" ]; then
-             echo "No app-icon.png found, creating placeholder..."
              echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" | base64 -d > app-icon.png
           fi
           
+          # 处理图标
           if [ -f "app-icon.png" ]; then
             sips -z 1024 1024 app-icon.png --out "$ASSETS_PATH/1024.png"
             echo '{"images":[{"size":"1024x1024","idiom":"ios-marketing","filename":"1024.png","scale":"1x"},{"size":"1024x1024","idiom":"universal","platform":"ios","filename":"1024.png"}],"info":{"version":1,"author":"xcode"}}' > "$ASSETS_PATH/Contents.json"
           fi
 
-      # 打包流程 (保持不变)
+      # ⭐️ 核心步骤 3：定义新项目结构 (这是重建的蓝图)
+      - name: Create Project Definition
+        run: |
+          # 删掉那个坏掉的旧项目文件
+          rm -rf *.xcodeproj
+          
+          # 写入 XcodeGen 配置文件
+          cat > project.yml <<EOF
+          name: PakePlus
+          options:
+            bundleIdPrefix: com.tavern
+            deploymentTarget:
+              iOS: "16.0"
+          targets:
+            PakePlus:
+              type: application
+              platform: iOS
+              deploymentTarget: "16.0"
+              sources: [PakePlus]
+              settings:
+                PRODUCT_BUNDLE_IDENTIFIER: ${{ env.BUNDLE_ID }}
+                INFOPLIST_FILE: PakePlus/Info.plist
+                IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+                CODE_SIGN_IDENTITY: ""
+                CODE_SIGNING_REQUIRED: "NO"
+                CODE_SIGNING_ALLOWED: "NO"
+                MARKETING_VERSION: ${{ env.VERSION }}
+                CURRENT_PROJECT_VERSION: 1
+              info:
+                path: PakePlus/Info.plist
+                properties:
+                  NSAppTransportSecurity:
+                    NSAllowsArbitraryLoads: true
+                  UIStatusBarHidden: true
+                  UIViewControllerBasedStatusBarAppearance: false
+          EOF
+
+      # ⭐️ 核心步骤 4：执行重建
+      - name: Generate New Project
+        run: xcodegen generate
+
+      # ⭐️ 核心步骤 5：打包新项目
       - name: Archive with Xcode
         run: |
-          PROJECT_NAME=$(ls -d *.xcodeproj | head -n 1)
-          SCHEME_NAME=$(basename "$PROJECT_NAME" .xcodeproj)
-          
-          echo "Archiving $SCHEME_NAME..."
-          
+          # 此时 PakePlus.xcodeproj 已经是全新的了
           xcodebuild archive \
-            -project "$PROJECT_NAME" \
-            -scheme "$SCHEME_NAME" \
+            -project "PakePlus.xcodeproj" \
+            -scheme "PakePlus" \
             -configuration Release \
             -sdk iphoneos \
             -archivePath "./build/${{ env.NAME }}.xcarchive" \
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            COMPILER_INDEX_STORE_ENABLE=NO
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
 
       - name: Export App and Package IPA
         run: |
