@@ -1,19 +1,22 @@
-name: Build IPA
+name: Build IPA (Clean Rewrite)
 
 on:
   workflow_dispatch: # 手动触发
 
 env:
-  NAME: "SillyTavern"
-  VERSION: "1.0.0"
+  # 在这里修改你的应用信息
+  APP_NAME: "SillyTavern"
   BUNDLE_ID: "com.tavern.ios"
+  # 你的酒馆地址
+  TARGET_URL: "http://100.86.55.29:8000"
+  VERSION: "1.0.0"
 
 jobs:
   build:
-    runs-on: macos-14 # 使用稳定的 Xcode 15 环境
+    runs-on: macos-14 # 使用稳定的 macOS 14 (Xcode 15)
     
     steps:
-      - name: Checkout Repository
+      - name: Checkout (Just for permissions)
         uses: actions/checkout@v4
 
       - name: Set up Xcode
@@ -21,113 +24,153 @@ jobs:
         with:
           xcode-version: '15.4'
 
-      - uses: pnpm/action-setup@v3
-        with:
-          version: latest
-
-      - name: Sync node version and setup cache
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-
-      - name: Init Project Config
-        run: |
-          pnpm install
-          pnpm pp:worker
-
-      # ⭐️ 核心步骤 1：安装 XcodeGen 工具
-      - name: Install XcodeGen
+      - name: Install Tools
         run: brew install xcodegen
 
-      # ⭐️ 核心步骤 2：生成缺失的图标 (防止新项目缺资源)
-      - name: Fix Assets & Icons
+      # ⭐️ 第一步：清理并创建目录
+      - name: Prepare Clean Workspace
         run: |
-          echo "Generating missing AppIcons..."
-          mkdir -p "./PakePlus/Preview Content"
-          ASSETS_PATH="./PakePlus/Assets.xcassets/AppIcon.appiconset"
-          
-          # 生成临时图标
-          if [ ! -f "app-icon.png" ]; then
-             echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" | base64 -d > app-icon.png
-          fi
-          
-          # 处理图标
-          if [ -f "app-icon.png" ]; then
-            sips -z 1024 1024 app-icon.png --out "$ASSETS_PATH/1024.png"
-            echo '{"images":[{"size":"1024x1024","idiom":"ios-marketing","filename":"1024.png","scale":"1x"},{"size":"1024x1024","idiom":"universal","platform":"ios","filename":"1024.png"}],"info":{"version":1,"author":"xcode"}}' > "$ASSETS_PATH/Contents.json"
-          fi
+          echo "Cleaning up everything..."
+          rm -rf *
+          mkdir -p App/Sources
+          mkdir -p App/Resources
 
-      # ⭐️ 核心步骤 3：定义新项目结构 (这是重建的蓝图)
-      - name: Create Project Definition
+      # ⭐️ 第二步：生成图标 (红色方块保底)
+      - name: Generate Icon
         run: |
-          # 删掉那个坏掉的旧项目文件
-          rm -rf *.xcodeproj
-          
-          # 写入 XcodeGen 配置文件
+          echo "Generating Icon..."
+          # 生成一个简单的红色图标
+          echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" | base64 -d > App/Resources/AppIcon.png
+          # 生成 1024 大图
+          sips -z 1024 1024 App/Resources/AppIcon.png --out App/Resources/Icon1024.png
+
+      # ⭐️ 第三步：现场写入 Swift 代码 (你的全屏酒馆逻辑)
+      - name: Write Swift Code
+        run: |
+          # 1. 写入入口文件
+          cat > App/Sources/SillyTavernApp.swift <<EOF
+          import SwiftUI
+          @main
+          struct SillyTavernApp: App {
+              var body: some Scene {
+                  WindowGroup {
+                      ContentView()
+                  }
+              }
+          }
+          EOF
+
+          # 2. 写入网页视图文件 (包含全屏补丁)
+          cat > App/Sources/ContentView.swift <<EOF
+          import SwiftUI
+          import WebKit
+
+          struct ContentView: View {
+              var body: some View {
+                  WebView(url: URL(string: "${{ env.TARGET_URL }}")!)
+                      .edgesIgnoringSafeArea(.all)
+                      .statusBar(hidden: true)
+              }
+          }
+
+          struct WebView: UIViewRepresentable {
+              let url: URL
+              func makeUIView(context: Context) -> WKWebView {
+                  let config = WKWebViewConfiguration()
+                  config.allowsInlineMediaPlayback = true
+                  if #available(iOS 15.4, *) {
+                      config.setValue(true, forKey: "allowsElementPresentingFullscreen")
+                  }
+                  let webView = WKWebView(frame: .zero, configuration: config)
+                  webView.scrollView.bounces = false
+                  // 注入全屏补丁
+                  let script = """
+                  var meta = document.createElement('meta');
+                  meta.name = 'viewport';
+                  meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
+                  document.head.appendChild(meta);
+                  if (document.documentElement.webkitRequestFullscreen) {
+                      document.documentElement.requestFullscreen = document.documentElement.webkitRequestFullscreen;
+                      Element.prototype.requestFullscreen = Element.prototype.webkitRequestFullscreen || Element.prototype.webkitEnterFullscreen;
+                  }
+                  """
+                  let userScript = WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
+                  webView.configuration.userContentController.addUserScript(userScript)
+                  webView.load(URLRequest(url: url))
+                  return webView
+              }
+              func updateUIView(_ uiView: WKWebView, context: Context) {}
+          }
+          EOF
+
+      # ⭐️ 第四步：生成项目配置文件 (XcodeGen)
+      - name: Generate Project File
+        run: |
           cat > project.yml <<EOF
-          name: PakePlus
+          name: ${{ env.APP_NAME }}
           options:
-            bundleIdPrefix: com.tavern
+            bundleIdPrefix: ${{ env.BUNDLE_ID }}
             deploymentTarget:
               iOS: "16.0"
           targets:
-            PakePlus:
+            ${{ env.APP_NAME }}:
               type: application
               platform: iOS
-              deploymentTarget: "16.0"
-              sources: [PakePlus]
+              sources: [App/Sources]
               settings:
                 PRODUCT_BUNDLE_IDENTIFIER: ${{ env.BUNDLE_ID }}
-                INFOPLIST_FILE: PakePlus/Info.plist
+                INFOPLIST_FILE: Info.plist
                 IPHONEOS_DEPLOYMENT_TARGET: "16.0"
                 CODE_SIGN_IDENTITY: ""
                 CODE_SIGNING_REQUIRED: "NO"
                 CODE_SIGNING_ALLOWED: "NO"
-                MARKETING_VERSION: ${{ env.VERSION }}
                 CURRENT_PROJECT_VERSION: 1
+                MARKETING_VERSION: ${{ env.VERSION }}
+                ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
               info:
-                path: PakePlus/Info.plist
+                path: Info.plist
                 properties:
                   NSAppTransportSecurity:
                     NSAllowsArbitraryLoads: true
                   UIStatusBarHidden: true
                   UIViewControllerBasedStatusBarAppearance: false
+                  UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
           EOF
+          
+          # 创建 Asset Catalog 结构
+          mkdir -p App/Sources/Assets.xcassets/AppIcon.appiconset
+          mv App/Resources/Icon1024.png App/Sources/Assets.xcassets/AppIcon.appiconset/1024.png
+          echo '{"images":[{"size":"1024x1024","idiom":"ios-marketing","filename":"1024.png","scale":"1x"},{"size":"1024x1024","idiom":"universal","platform":"ios","filename":"1024.png"}],"info":{"version":1,"author":"xcode"}}' > App/Sources/Assets.xcassets/AppIcon.appiconset/Contents.json
 
-      # ⭐️ 核心步骤 4：执行重建
-      - name: Generate New Project
-        run: xcodegen generate
+          # 执行生成
+          xcodegen generate
 
-      # ⭐️ 核心步骤 5：打包新项目
-      - name: Archive with Xcode
+      # ⭐️ 第五步：打包 (Archive)
+      - name: Archive
         run: |
-          # 此时 PakePlus.xcodeproj 已经是全新的了
           xcodebuild archive \
-            -project "PakePlus.xcodeproj" \
-            -scheme "PakePlus" \
+            -project "${{ env.APP_NAME }}.xcodeproj" \
+            -scheme "${{ env.APP_NAME }}" \
             -configuration Release \
             -sdk iphoneos \
-            -archivePath "./build/${{ env.NAME }}.xcarchive" \
+            -archivePath "./build/${{ env.APP_NAME }}.xcarchive" \
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             AD_HOC_CODE_SIGNING_ALLOWED=YES
 
-      - name: Export App and Package IPA
+      # ⭐️ 第六步：导出 IPA
+      - name: Export IPA
         run: |
           mkdir -p Payload
-          APP_PATH=$(find ./build/${{ env.NAME }}.xcarchive -name "*.app" -type d | head -n 1)
-          echo "Found App at: $APP_PATH"
-          
+          APP_PATH=$(find ./build/${{ env.APP_NAME }}.xcarchive -name "*.app" -type d | head -n 1)
           cp -r "$APP_PATH" Payload/
-          zip -r "${{ env.NAME }}-${{ env.VERSION }}.ipa" Payload
-          echo "ipa_path=${{ env.NAME }}-${{ env.VERSION }}.ipa" >> $GITHUB_ENV
+          zip -r "${{ env.APP_NAME }}.ipa" Payload
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SillyTavern-IPA
+          name: SillyTavern-Clean-IPA
           path: "*.ipa"
 
       - name: Upload to Release
@@ -135,7 +178,7 @@ jobs:
         with:
           files: "*.ipa"
           tag_name: 'v${{ env.VERSION }}'
-          name: '${{ env.NAME }} v${{ env.VERSION }}'
+          name: '${{ env.APP_NAME }} v${{ env.VERSION }}'
           draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
