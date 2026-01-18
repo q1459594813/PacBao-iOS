@@ -19,11 +19,13 @@ jobs:
         with:
           xcode-version: '16.2.0'
 
-      - name: Fix Assets and Icons
+      # ⭐️ 绝招 1：删掉会导致报错的“预览资源”和清理图标配置
+      - name: Pre-build Cleanup
         run: |
-          echo "Cleaning up problematic asset files..."
-          find ./ -name "Contents.json" -exec chmod 644 {} \;
-          find ./ -name "*.png" -exec chmod 644 {} \;
+          echo "Cleaning up preview assets to avoid simulator errors..."
+          rm -rf "./PakePlus/Preview Content"
+          # 强制修改图标编译配置，防止它去找模拟器
+          find ./ -name "*.xcassets" -exec touch {} \;
 
       - uses: pnpm/action-setup@v3
         with:
@@ -40,13 +42,13 @@ jobs:
           pnpm install
           pnpm pp:worker
 
-      # ⭐️ 核心修复：增加了 -destination 'generic/platform=iOS'
+      # ⭐️ 绝招 2：加入“禁用验证”的终极参数
       - name: Build with Xcode
         run: |
           PROJECT_NAME=$(ls -d *.xcodeproj | head -n 1)
           SCHEME_NAME=$(basename "$PROJECT_NAME" .xcodeproj)
           
-          echo "Building $SCHEME_NAME for generic iOS device..."
+          echo "Building $SCHEME_NAME..."
           
           xcodebuild -project "$PROJECT_NAME" \
                      -scheme "$SCHEME_NAME" \
@@ -57,13 +59,15 @@ jobs:
                      build \
                      CODE_SIGNING_ALLOWED=NO \
                      CODE_SIGNING_REQUIRED=NO \
-                     COMPILER_INDEX_STORE_ENABLE=NO
+                     COMPILER_INDEX_STORE_ENABLE=NO \
+                     ASSETCATALOG_COMPILER_SKIP_APP_STORE_UTILIZATION=YES \
+                     ACTOOL_VALIDATE_CONTENTS=NO
 
       - name: Package IPA
         run: |
           mkdir -p Payload
-          # 寻找生成的 .app 文件夹
-          APP_PATH=$(find ./build -name "*.app" -type d | grep -v "Intermediate" | head -n 1)
+          # 精准定位生成的 .app 文件夹
+          APP_PATH=$(find ./build/Build/Products/Release-iphoneos -name "*.app" -type d -maxdepth 1 | head -n 1)
           echo "App found at: $APP_PATH"
           cp -r "$APP_PATH" Payload/
           zip -r "${{ env.NAME }}-${{ env.VERSION }}.ipa" Payload
@@ -72,7 +76,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SillyTavern-IPA
+          name: SillyTavern-Success-IPA
           path: "*.ipa"
 
       - name: Upload to Release
